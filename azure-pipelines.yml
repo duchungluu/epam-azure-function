@@ -1,0 +1,116 @@
+trigger:
+- master
+
+variables:
+  # Azure Resource Manager connection created during pipeline creation
+  azureSubscription: '{{ azureRmConnection.Id }}'
+
+  # Function app name
+  functionAppName: '{{ functionAppName }}'
+
+  # Agent VM image name
+  vmImageName: 'ubuntu-latest'
+
+  # Working Directory
+  workingDirectory: '{{ workingDirectory }}'
+
+stages:
+- stage: Build
+  jobs:
+  - job: Build
+    displayName: Build
+    pool:
+      vmImage: $(vmImageName)
+
+    steps:
+    - task: UsePythonVersion@0
+      displayName: 'Use Python 3.6'
+      inputs:
+        versionSpec: '3.6'
+        addToPath: true
+
+    - bash: |
+        pip install --target="./.python_packages/lib/site-packages" -r ./requirements.txt
+      workingDirectory: $(workingDirectory)
+      displayName: 'Install application dependencies'
+
+    - task: ArchiveFiles@2
+      displayName: 'Archive files'
+      inputs:
+        rootFolderOrFile: '$(workingDirectory)HttpTrigger'
+        includeRootFolder: false
+        archiveType: zip
+        archiveFile: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
+        replaceExistingArchive: true
+
+    - publish: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
+      artifact: drop
+
+- stage: Deploy
+  dependsOn: Build
+  condition: succeeded()
+
+  jobs:
+  - deployment: Deploy
+    displayName: Deploy
+    environment: 'development'
+    pool:
+      vmImage: $(vmImageName)
+
+    strategy:
+      runOnce:
+        deploy:
+
+          steps:
+          - task: AzureFunctionApp@1
+            displayName: 'Azure functions app deploy'
+            inputs:
+              azureSubscription: '$(azureSubscription)'
+              appType: functionAppLinux
+              appName: $(functionAppName)
+              package: '$(Pipeline.Workspace)/drop/$(Build.BuildId).zip'
+
+- stage: LoadTest
+  dependsOn: Deploy
+  condition: succeeded()
+
+  jobs:
+  - job: LoadTestJob
+    displayName: 'Run Load Test'
+    pool:
+      vmImage: $(vmImageName)
+
+    steps:
+      - task: ApacheJMeter@1
+        displayName: 'Run Apache JMeter Tests'
+        inputs:
+          jMeterVersion: 'latest' 
+          testFiles: '**/*.jmx' 
+          resultsDirectory: '$(workingDirectory)/JMeterResults'
+          additionalArguments: '-Jhost=$(functionAppName).azurewebsites.net -Jport=80'
+
+
+- stage: SendEmail
+  dependsOn: LoadTest
+  condition: succeeded()
+
+  jobs:
+  - job: SendEmailJob
+    displayName: 'Send Email with Results'
+    pool:
+      vmImage: $(vmImageName)
+    steps:
+      - task: PublishTestResults@2
+        displayName: 'Publish Load Test Results'
+        inputs:
+          testResultsFormat: 'Junit'
+          testResultsFiles: '$(workingDirectory)/JMeterResults/*.jtl'
+          mergeTestResults: tru
+      - task: EmailServiceTask@1
+        displayName: 'Send Email Notification'
+        inputs:
+          toEmails: 'recipient@example.com'
+          subject: 'Load Test Results'
+          body: |
+            The load test was completed. Here are the results
+            $(System.CollectionUri)$(System.TeamProject)/_build/results?buildId=$(Build.BuildId)&view=ms.vss-test-web.build-test-results-tab

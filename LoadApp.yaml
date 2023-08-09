@@ -1,0 +1,6 @@
+version: v8.8
+testId: LoadTest
+displayName: Load Test
+testPlan: LoadTest.jmx
+description: 'Run load test (generate multiple requests) calling #2'
+engineInstances: 1

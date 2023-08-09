@@ -105,7 +105,7 @@ stages:
         inputs:
           testResultsFormat: 'Junit'
           testResultsFiles: '$(workingDirectory)/JMeterResults/*.jtl'
-          mergeTestResults: tru
+          mergeTestResults: true
       - task: EmailServiceTask@1
         displayName: 'Send Email Notification'
         inputs:

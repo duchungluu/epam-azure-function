@@ -1,0 +1,111 @@
+# This is a basic workflow to help you get started with Actions
+
+name: CICD for Azure function App
+
+# Controls when the workflow will run
+on:
+  push:
+    branches:
+      - master
+      - feature/*
+
+env:
+  AZURE_FUNCTIONAPP_NAME: 'epam-azure-project' # set this to the path to your function app project, defaults to the repository root
+  AZURE_FUNCTIONAPP_PACKAGE_PATH: '.' # set this to the path to your function app project, defaults to the repository root
+  PYTHON_VERSION: '3.10'
+  LOAD_TEST_RESOURCE: 'epam-azure-loadtest'
+  LOAD_TEST_RESOURCE_GROUP: 'epam-azure-function'
+  APPINSIGHTLOCATION: 'East Asia'
+  DATABASEACCOUNTLOCATION: 'eastasia'
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  Clone-Build-Deploy:
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - name: 'Checkout GitHub Action'
+        uses: actions/checkout@v3
+
+      - name: Setup Python ${{ env.PYTHON_VERSION }} Environment
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 'Resolve Project Dependencies Using Pip'
+        shell: bash
+        run: |
+          pushd './${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}'
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt --target=".python_packages/lib/site-packages"
+          popd
+
+      - name: 'Run Azure Functions Action'
+        uses: Azure/functions-action@v1
+        id: fa
+        with:
+          app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
+          package: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+          publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
+          scm-do-build-during-deployment: true
+          enable-oryx-build: true
+
+  LoadTest-SendEmail:
+    name: LoadTest-SendEmail
+    needs: Clone-Build-Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout GitHub Actions
+        uses: actions/checkout@v3
+
+      - name: Login to Azure
+        uses: azure/login@v1
+        continue-on-error: false
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Create Resource Group
+        uses: azure/powershell@v1
+        continue-on-error: false
+        with:
+          inlineScript: |
+            az group create --name "${{ env.LOAD_TEST_RESOURCE_GROUP }}" --location "${{ env.LOCATION }}"
+          azPSVersion: 'latest'
+
+      - name: 'Azure Load Testing'
+        uses: azure/load-testing@v1
+        with:
+          loadTestConfigFile: 'LoadApp.yaml'
+          loadTestResource: ${{ env.LOAD_TEST_RESOURCE }}
+          resourceGroup: ${{ env.LOAD_TEST_RESOURCE_GROUP }}
+          env: |
+            [
+              {
+              "name": "functionapp",
+              "value": "${{ env.AZURE_FUNCTIONAPP_NAME }}.azurewebsites.net/api/httptrigger"
+              }
+            ]
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: loadTestResults
+          path: ${{ github.workspace }}/loadTest
+
+      - name: Send email with artifacts
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: 'Load test results for ${{ github.repository }} ${{ github.sha }}'
+          from: Test Suite
+          body: |
+            Hi,
+            The Load test workflow for ${{ github.repository }} ${{ github.sha }} has completed.
+            Please find the test artifacts attached to this email.
+            Regards,
+            Luu
+          to: ${{ secrets.EMAIL_USERNAME }}
+          attachments: |
+            ${{ github.workspace }}/loadTest/*

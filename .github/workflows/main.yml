@@ -51,7 +51,7 @@ jobs:
           enable-oryx-build: true
 
   LoadTest-SendEmail:
-    name: Load Test
+    name: LoadTest-SendEmail
     needs: Clone-Build-Deploy
     runs-on: ubuntu-latest
     steps:
